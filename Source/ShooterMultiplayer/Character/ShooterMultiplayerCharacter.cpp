@@ -11,6 +11,9 @@
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "Components/WidgetComponent.h"
+#include "Net/UnrealNetwork.h"
+#include "ShooterMultiplayer/Components/CombatComponent.h"
+#include "ShooterMultiplayer/Weapon/Weapon.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -19,6 +22,7 @@ DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
 AShooterMultiplayerCharacter::AShooterMultiplayerCharacter()
 {
+	PrimaryActorTick.bCanEverTick = true;
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
 		
@@ -56,15 +60,79 @@ AShooterMultiplayerCharacter::AShooterMultiplayerCharacter()
 
 	OverheadWidget = CreateDefaultSubobject<UWidgetComponent>("OverheadWidget");
 	OverheadWidget->SetupAttachment(RootComponent);
+
+	CombatComponent = CreateDefaultSubobject<UCombatComponent>("Combat Component");
+	CombatComponent->SetIsReplicated(true);
+
+	GetCharacterMovement()->NavAgentProps.bCanCrouch = true;
+}
+
+void AShooterMultiplayerCharacter::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+}
+
+void AShooterMultiplayerCharacter::OnRep_OverlappingWeapon(AWeapon* LastWeapon)
+{
+	if (OverlappingWeapon)
+	{
+		OverlappingWeapon->ShowPickupWidget(true);
+	}
+	if (LastWeapon)
+	{
+		LastWeapon->ShowPickupWidget(false);
+	}
+}
+
+void AShooterMultiplayerCharacter::SetOverlappingWeapon(AWeapon* Weapon)
+{
+	if (OverlappingWeapon)
+	{
+		OverlappingWeapon->ShowPickupWidget(false);
+	}
+	OverlappingWeapon = Weapon;
+	if (IsLocallyControlled())
+	{
+		if (OverlappingWeapon)
+		{
+			OverlappingWeapon->ShowPickupWidget(true);
+		}
+	}
+}
+
+bool AShooterMultiplayerCharacter::IsWeaponEquipped()
+{
+	return (CombatComponent && CombatComponent->EquippedWeapon);
+}
+
+bool AShooterMultiplayerCharacter::IsAiming()
+{
+	return (CombatComponent && CombatComponent->bAiming);
+}
+
+void AShooterMultiplayerCharacter::GetLifetimeReplicatedProps(TArray<class FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME_CONDITION(AShooterMultiplayerCharacter, OverlappingWeapon, COND_OwnerOnly);
+}
+
+void AShooterMultiplayerCharacter::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+	if (CombatComponent)
+	{
+		CombatComponent->Character = this;
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////
 // Input
 
+
+
 void AShooterMultiplayerCharacter::NotifyControllerChanged()
 {
 	Super::NotifyControllerChanged();
-
 	// Add Input Mapping Context
 	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
 	{
@@ -77,18 +145,15 @@ void AShooterMultiplayerCharacter::NotifyControllerChanged()
 
 void AShooterMultiplayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
-	// Set up action bindings
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
-		
-		// Jumping
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
-
-		// Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AShooterMultiplayerCharacter::Move);
-
-		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AShooterMultiplayerCharacter::Look);
+		EnhancedInputComponent->BindAction(EquipAction, ETriggerEvent::Triggered, this, &AShooterMultiplayerCharacter::Equip);
+		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Started, this, &AShooterMultiplayerCharacter::Crouch);
+		EnhancedInputComponent->BindAction(AimingAction, ETriggerEvent::Started, this, &AShooterMultiplayerCharacter::AimingStart);
+		EnhancedInputComponent->BindAction(AimingAction, ETriggerEvent::Completed, this, &AShooterMultiplayerCharacter::AimingEnd);
 	}
 	else
 	{
@@ -100,7 +165,6 @@ void AShooterMultiplayerCharacter::Move(const FInputActionValue& Value)
 {
 	// input is a Vector2D
 	FVector2D MovementVector = Value.Get<FVector2D>();
-
 	if (Controller != nullptr)
 	{
 		// find out which way is forward
@@ -129,5 +193,56 @@ void AShooterMultiplayerCharacter::Look(const FInputActionValue& Value)
 		// add yaw and pitch input to controller
 		AddControllerYawInput(LookAxisVector.X);
 		AddControllerPitchInput(LookAxisVector.Y);
+	}
+}
+
+void AShooterMultiplayerCharacter::Equip()
+{
+	if (CombatComponent)
+	{
+		if (HasAuthority())
+		{
+			CombatComponent->EquipWeapon(OverlappingWeapon);
+		}
+		else
+		{
+			ServerEquipButtonPressed();
+		}
+	}
+}
+
+void AShooterMultiplayerCharacter::ServerEquipButtonPressed_Implementation()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->EquipWeapon(OverlappingWeapon);
+	}
+}
+
+void AShooterMultiplayerCharacter::Crouch()
+{
+	if (bIsCrouched)
+	{
+		ACharacter::UnCrouch();
+	}
+	else
+	{
+		ACharacter::Crouch();
+	}
+}
+
+void AShooterMultiplayerCharacter::AimingStart()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->SetAiming(true);
+	}
+}
+
+void AShooterMultiplayerCharacter::AimingEnd()
+{
+	if (CombatComponent)
+	{
+		CombatComponent->SetAiming(false);
 	}
 }
