@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Logging/LogMacros.h"
+#include "ShooterMultiplayer/ShooterTypes/TurningInPlace.h"
 #include "ShooterMultiplayer/Weapon/Weapon.h"
 #include "ShooterMultiplayerCharacter.generated.h"
 
@@ -57,6 +58,8 @@ protected:
 	void Crouch();
 	void AimingStart();
 	void AimingEnd();
+	void AimOffset(float DeltaTime);
+	virtual void Jump() override;
 
 	virtual void NotifyControllerChanged() override;
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
@@ -77,6 +80,15 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	class UCombatComponent* CombatComponent;
 
+	float AO_Yaw;
+	float InterpAO_Yaw;
+	float AO_Pitch;
+	FRotator StartingAimRotation;
+
+	ETurningInPlace TurningInPlace;
+
+	void TurnInPlace(float DeltaTime);
+
 	UFUNCTION()
 	void OnRep_OverlappingWeapon(AWeapon* LastWeapon);
 	UFUNCTION(Server, Reliable)
@@ -86,6 +98,10 @@ public:
 	void SetOverlappingWeapon(AWeapon* Weapon);
 	bool IsWeaponEquipped();
 	bool IsAiming();
+	FORCEINLINE float GetAOYaw() const { return AO_Yaw; }
+	FORCEINLINE float GetAOPitch() const { return AO_Pitch; }
+	AWeapon* GetEquippedWeapon();
+	FORCEINLINE ETurningInPlace GetTurningInPlace() const { return TurningInPlace; }
 };
 
 
